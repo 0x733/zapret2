@@ -785,7 +785,8 @@ function dis_l4_name(dis)
 	elseif dis.icmp then
 		l4="icmp"
 	else
-		l4="raw"..ip_proto_l3(dis)
+		local proto = ip_proto_l3(dis)
+		l4 = proto and ("raw"..proto) or "raw"
 	end
 	return l4
 end
@@ -805,7 +806,9 @@ function dis_l4_ports(dis)
 end
 
 function dis_timer_name(dis)
-	return table.concat({ntop(dis_ipsrc(dis)),"->",ntop(dis_ipdst(dis)),"_",dis_l4_name(dis),"_",dis_l4_ports(dis)})
+	local src = dis_ipsrc(dis)
+	local dst = dis_ipdst(dis)
+	return table.concat({src and ntop(src) or "?","->",dst and ntop(dst) or "?","_",dis_l4_name(dis),"_",dis_l4_ports(dis)})
 end
 function desync_timer_name(desync)
 	local name = dis_timer_name(desync.dis)

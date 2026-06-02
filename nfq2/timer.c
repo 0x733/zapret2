@@ -136,8 +136,16 @@ uint64_t TimerPoolRun(timer_pool **pp, bool *dirty, uint64_t bt)
 					elem->bt_next = bt + elem->period;
 				}
 			}
+			else
+			{
+				// lua callback deleted or recreated the timer; elem is no longer valid
+				elem = NULL;
+			}
 
 			free(name);
+			if (*dirty)
+				// lua modified the pool; tmp may point to a freed entry; break and let rescan handle remaining timers
+				break;
 		}
 		if (elem)
 		{

@@ -94,14 +94,14 @@ function send(ctx, desync)
 		local dis = deepcopy(desync.dis)
 		apply_fooling(desync, dis)
 		apply_ip_id(desync, dis, nil, "none")
-		if desync.arg.delay then
+		local delay_ms = desync.arg.delay and tonumber(desync.arg.delay)
+		if delay_ms and delay_ms > 0 then
 			local tname = "send_"..desync_timer_name(desync)
-			timer_set(tname, "send_timer_delayed", tonumber(desync.arg.delay), true, {dis = dis, opts = desync_opts(desync)})
+			timer_set(tname, "send_timer_delayed", delay_ms, true, {dis = dis, opts = desync_opts(desync)})
 			return VERDICT_DROP
-		else
-			-- it uses rawsend, reconstruct and ipfrag options
-			rawsend_dissect_ipfrag(dis, desync_opts(desync))
 		end
+		-- it uses rawsend, reconstruct and ipfrag options
+		rawsend_dissect_ipfrag(dis, desync_opts(desync))
 	end
 end
 function send_timer_delayed(name, data)

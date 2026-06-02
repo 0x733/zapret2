@@ -9,6 +9,10 @@ require_root()
 			echo elevating with sudo
 			exec sudo -E sh "$exe"
 		}
+		exists doas && {
+			echo elevating with doas
+			exec doas -E sh "$exe"
+		}
 		exists su && {
 			echo elevating with su
 			case "$UNAME" in
@@ -21,7 +25,7 @@ require_root()
 			esac
 			exec su $preserve_env root -c "sh \"$exe\""
 		}
-		echo su or sudo not found
+		echo su, sudo or doas not found
 		exitp 2
 	}
 	HAVE_ROOT=1

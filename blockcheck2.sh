@@ -64,6 +64,10 @@ DNSCHECK_DIG1=/tmp/dig1.txt
 DNSCHECK_DIG2=/tmp/dig2.txt
 DNSCHECK_DIGS=/tmp/digs.txt
 
+LOG_DIR=${LOG_DIR:-/tmp}
+LOG_ENABLE=${LOG_ENABLE:-1}
+# LOG_FILE - override auto-generated path
+# LOG_SUMMARY - override auto-generated summary path
 
 unset PF_STATUS
 PF_RULES_SAVE=/tmp/pf-zapret-save.conf
@@ -1192,6 +1196,74 @@ report_strategy()
 	fi
 }
 
+log_timestamp()
+{
+	date '+%Y-%m-%d %H:%M:%S'
+}
+log_section()
+{
+	echo
+	echo "### $* [$(log_timestamp)] ###"
+}
+log_init()
+{
+	[ "$LOG_ENABLE" = 0 ] && return
+	[ -z "$LOG_FILE" ] && {
+		local ts safe
+		ts="$(date +%Y%m%d_%H%M%S)"
+		safe="$(echo "$DOMAINS" | tr ' /\\:' '____' | cut -c1-50)"
+		LOG_FILE="${LOG_DIR}/blockcheck_${ts}_${safe}.log"
+	}
+	[ -z "$LOG_SUMMARY" ] && LOG_SUMMARY="${LOG_FILE%.log}.summary"
+	mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || {
+		echo "WARNING: cannot create log dir $(dirname "$LOG_FILE"), logging disabled"
+		LOG_FILE=
+		return
+	}
+	printf '=== blockcheck log ===\ndate     : %s\ndomains  : %s\nipvs     : %s\ntest     : %s\nscanlevel: %s\n======================\n' \
+		"$(date)" "$DOMAINS" "$IPVS" "$TEST" "$SCANLEVEL" >"$LOG_FILE"
+	echo "* log : $LOG_FILE"
+	_log_start_capture
+}
+_log_start_capture()
+{
+	[ -z "$LOG_FILE" ] && return
+	local fifo="/tmp/blockcheck_pipe_$$"
+	mkfifo "$fifo" 2>/dev/null || {
+		echo "WARNING: mkfifo failed, output capture disabled"
+		return
+	}
+	exec 3>&1 4>&2
+	tee -a "$LOG_FILE" <"$fifo" >&3 &
+	LOG_TEE_PID=$!
+	exec >"$fifo" 2>&1
+	rm -f "$fifo"
+}
+log_stop()
+{
+	[ -z "$LOG_TEE_PID" ] && return
+	exec >&3 2>&4 3>&- 4>&-
+	wait "$LOG_TEE_PID" 2>/dev/null
+	LOG_TEE_PID=
+	[ -n "$LOG_FILE" ] && printf '\n=== log end : %s ===\n' "$(date)" >>"$LOG_FILE"
+}
+report_save_summary()
+{
+	[ -z "$LOG_SUMMARY" ] && return
+	local n=0 s
+	{
+		printf 'timestamp=%s\ndomains=%s\nipvs=%s\ntest=%s\nscanlevel=%s\n---\n' \
+			"$(date +%Y-%m-%dT%H:%M:%S)" "$DOMAINS" "$IPVS" "$TEST" "$SCANLEVEL"
+		NREPORT=${NREPORT:-0}
+		while [ $n -lt $NREPORT ]; do
+			eval s=\"\${REPORT_$n}\"
+			echo "$s"
+			n=$(($n+1))
+		done
+	} >"$LOG_SUMMARY"
+	echo "* summary : $LOG_SUMMARY"
+}
+
 test_runner()
 {
 	# $1 - function name
@@ -1844,6 +1916,7 @@ sigint()
 	echo
 	echo terminating...
 	unprepare_all
+	log_stop
 	exitp 1
 }
 sigint_cleanup()
@@ -1853,8 +1926,8 @@ sigint_cleanup()
 }
 sigsilent()
 {
-	# must not write anything here to stdout
 	unprepare_all
+	log_stop
 	exit 1
 }
 
@@ -1868,6 +1941,7 @@ trap sigint_cleanup INT
 check_dns
 check_virt
 ask_params
+log_init
 trap - INT
 
 PID=
@@ -1880,13 +1954,25 @@ for dom in $DOMAINS; do
 	for IPV in $IPVS; do
 		configure_ip_version
 		[ "$ENABLE_HTTP" = 1 ] && {
+			log_section "HTTP ipv${IPV} ${dom}"
 			[ "$SKIP_IPBLOCK" = 1 ] || check_domain_port_block $dom $HTTP_PORT
 			check_domain_http $dom
 		}
-		[ "$ENABLE_HTTPS_TLS12" = 1 -o "$ENABLE_HTTPS_TLS13" = 1 ] && [ "$SKIP_IPBLOCK" != 1 ] && check_domain_port_block $dom $HTTPS_PORT
-		[ "$ENABLE_HTTPS_TLS12" = 1 ] && check_domain_https_tls12 $dom
-		[ "$ENABLE_HTTPS_TLS13" = 1 ] && check_domain_https_tls13 $dom
-		[ "$ENABLE_HTTP3" = 1 ] && check_domain_http3 $dom
+		[ "$ENABLE_HTTPS_TLS12" = 1 -o "$ENABLE_HTTPS_TLS13" = 1 ] && {
+			[ "$SKIP_IPBLOCK" != 1 ] && check_domain_port_block $dom $HTTPS_PORT
+		}
+		[ "$ENABLE_HTTPS_TLS12" = 1 ] && {
+			log_section "HTTPS TLS1.2 ipv${IPV} ${dom}"
+			check_domain_https_tls12 $dom
+		}
+		[ "$ENABLE_HTTPS_TLS13" = 1 ] && {
+			log_section "HTTPS TLS1.3 ipv${IPV} ${dom}"
+			check_domain_https_tls13 $dom
+		}
+		[ "$ENABLE_HTTP3" = 1 ] && {
+			log_section "HTTP3/QUIC ipv${IPV} ${dom}"
+			check_domain_http3 $dom
+		}
 	done
 done
 trap - HUP
@@ -1896,7 +1982,7 @@ trap - INT
 cleanup
 
 echo
-echo \* SUMMARY
+log_section "SUMMARY"
 report_print
 [ "$DOMAINS_COUNT" -gt 1 ] && {
 	echo
@@ -1917,4 +2003,6 @@ echo "This knowledge allows to understand better which strategies to prefer and 
 echo "Blockcheck does it's best to prioritize good strategies but it's not bullet-proof."
 echo "It was designed not as magic pill maker but as a DPI bypass test tool."
 
+report_save_summary
+log_stop
 exitp 0
